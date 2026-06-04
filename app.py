@@ -1,14 +1,19 @@
 """
 Streamlit Cloud Deployment — Sentiment Analysis System
 
-Standalone version for cloud deployment that loads the model
-directly instead of calling a separate API server.
+Standalone version for cloud deployment that uses the
+Hugging Face Inference API for predictions.
 Same UI and functionality as src/ui.py.
 """
 
 import streamlit as st
-import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import requests
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+HF_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
 
 # ---------------------------------------------------------------------------
 # Page setup
@@ -19,25 +24,6 @@ st.set_page_config(
     layout="centered",
 )
 
-
-# ---------------------------------------------------------------------------
-# Load model (cached so it only loads once)
-# ---------------------------------------------------------------------------
-@st.cache_resource
-def load_model():
-    """Load pre-trained sentiment analysis model and tokenizer."""
-    model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name)
-    model.eval()
-    return tokenizer, model
-
-
-tokenizer, model = load_model()
-
-# ---------------------------------------------------------------------------
-# UI
-# ---------------------------------------------------------------------------
 st.title("Sentiment Analysis System")
 st.markdown("---")
 
@@ -62,36 +48,49 @@ if analyze_clicked:
     else:
         with st.spinner("Analyzing sentiment…"):
             try:
-                inputs = tokenizer(
-                    user_text,
-                    return_tensors="pt",
-                    truncation=True,
-                    padding=True,
+                response = requests.post(
+                    HF_API_URL,
+                    json={"inputs": user_text},
+                    timeout=30,
                 )
 
-                with torch.no_grad():
-                    outputs = model(**inputs)
+                if response.status_code == 200:
+                    data = response.json()
 
-                probabilities = torch.softmax(outputs.logits, dim=-1)
-                predicted_class = torch.argmax(probabilities, dim=-1).item()
-                confidence = probabilities[0][predicted_class].item()
+                    # HF API returns [[{"label": "POSITIVE", "score": 0.99}, ...]]
+                    results = data[0] if isinstance(data[0], list) else data
+                    top_result = max(results, key=lambda x: x["score"])
 
-                sentiment = "positive" if predicted_class == 1 else "negative"
-                confidence = round(confidence, 4)
+                    sentiment = top_result["label"].lower()
+                    confidence = round(top_result["score"], 4)
 
-                st.markdown("### Results")
+                    st.markdown("### Results")
 
-                # Sentiment with colour coding
-                if sentiment == "positive":
-                    st.success(f"**Sentiment:** {sentiment.capitalize()} 😊")
+                    # Sentiment with colour coding
+                    if sentiment == "positive":
+                        st.success(f"**Sentiment:** {sentiment.capitalize()} 😊")
+                    else:
+                        st.error(f"**Sentiment:** {sentiment.capitalize()} 😟")
+
+                    # Confidence as a percentage metric
+                    st.metric(
+                        label="Confidence",
+                        value=f"{confidence * 100:.2f}%",
+                    )
+
+                elif response.status_code == 503:
+                    st.warning(
+                        "⏳ Model is loading, please wait 20 seconds and try again."
+                    )
                 else:
-                    st.error(f"**Sentiment:** {sentiment.capitalize()} 😟")
+                    st.error(
+                        f"Unexpected response (HTTP {response.status_code}). "
+                        "Please try again later."
+                    )
 
-                # Confidence as a percentage metric
-                st.metric(
-                    label="Confidence",
-                    value=f"{confidence * 100:.2f}%",
-                )
-
+            except requests.exceptions.ConnectionError:
+                st.error("⚠️ Could not connect to the prediction service.")
+            except requests.exceptions.Timeout:
+                st.error("⚠️ The request timed out. Please try again.")
             except Exception as exc:
-                st.error(f"⚠️ An error occurred during analysis: {exc}")
+                st.error(f"⚠️ An error occurred: {exc}")
