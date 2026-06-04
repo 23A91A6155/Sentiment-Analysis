@@ -7,13 +7,12 @@ Same UI and functionality as src/ui.py.
 """
 
 import streamlit as st
-import requests
+from huggingface_hub import InferenceClient
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 HF_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
 
 # ---------------------------------------------------------------------------
 # Page setup
@@ -42,55 +41,33 @@ analyze_clicked: bool = st.button("Analyze Sentiment", type="primary")
 # Prediction logic
 # ---------------------------------------------------------------------------
 if analyze_clicked:
-    # Guard against empty / whitespace-only input
     if not user_text or not user_text.strip():
         st.warning("Please enter some text before clicking **Analyze Sentiment**.")
     else:
         with st.spinner("Analyzing sentiment…"):
             try:
-                response = requests.post(
-                    HF_API_URL,
-                    json={"inputs": user_text},
-                    timeout=30,
+                client = InferenceClient()
+                results = client.text_classification(
+                    user_text,
+                    model=HF_MODEL,
                 )
 
-                if response.status_code == 200:
-                    data = response.json()
+                # Get the top prediction
+                top_result = results[0]
+                sentiment = top_result.label.lower()
+                confidence = round(top_result.score, 4)
 
-                    # HF API returns [[{"label": "POSITIVE", "score": 0.99}, ...]]
-                    results = data[0] if isinstance(data[0], list) else data
-                    top_result = max(results, key=lambda x: x["score"])
+                st.markdown("### Results")
 
-                    sentiment = top_result["label"].lower()
-                    confidence = round(top_result["score"], 4)
-
-                    st.markdown("### Results")
-
-                    # Sentiment with colour coding
-                    if sentiment == "positive":
-                        st.success(f"**Sentiment:** {sentiment.capitalize()} 😊")
-                    else:
-                        st.error(f"**Sentiment:** {sentiment.capitalize()} 😟")
-
-                    # Confidence as a percentage metric
-                    st.metric(
-                        label="Confidence",
-                        value=f"{confidence * 100:.2f}%",
-                    )
-
-                elif response.status_code == 503:
-                    st.warning(
-                        "⏳ Model is loading, please wait 20 seconds and try again."
-                    )
+                if sentiment == "positive":
+                    st.success(f"**Sentiment:** {sentiment.capitalize()} 😊")
                 else:
-                    st.error(
-                        f"Unexpected response (HTTP {response.status_code}). "
-                        "Please try again later."
-                    )
+                    st.error(f"**Sentiment:** {sentiment.capitalize()} 😟")
 
-            except requests.exceptions.ConnectionError:
-                st.error("⚠️ Could not connect to the prediction service.")
-            except requests.exceptions.Timeout:
-                st.error("⚠️ The request timed out. Please try again.")
+                st.metric(
+                    label="Confidence",
+                    value=f"{confidence * 100:.2f}%",
+                )
+
             except Exception as exc:
-                st.error(f"⚠️ An error occurred: {exc}")
+                st.error(f"⚠️ An error occurred during analysis: {exc}")
