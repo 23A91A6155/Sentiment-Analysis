@@ -1,0 +1,32 @@
+# ============================================
+# Dockerfile.api - Sentiment Analysis API
+# ============================================
+FROM python:3.11-slim
+
+# Prevent Python from buffering stdout/stderr
+ENV PYTHONUNBUFFERED=1
+
+# Install curl for container healthchecks
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy and install dependencies first (leverages Docker layer caching)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application source code
+COPY src/ ./src/
+
+# Copy trained model artifacts
+COPY model_output/ ./model_output/
+
+# Configurable port via build arg and environment variable
+ARG API_PORT=8000
+ENV API_PORT=${API_PORT}
+
+EXPOSE ${API_PORT}
+
+# Run the FastAPI application via uvicorn
+CMD uvicorn src.api:app --host 0.0.0.0 --port ${API_PORT}
